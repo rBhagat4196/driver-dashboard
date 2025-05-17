@@ -58,7 +58,11 @@ export default function RideRequests({ uid }) {
       const passenger = {
         id: request.riderId,
         name: request.riderName,
-        phone: request.phoneNumber
+        phone: request.phoneNumber,
+        pickup: request?.pickupLocation,
+        drop: request?.destination,
+        pickupCoordinates:request?.pickupCoordinates,
+        dropCoordinates:request?.dropCoordinates
       };
 
       // Update driver document
@@ -77,6 +81,8 @@ export default function RideRequests({ uid }) {
           fare: calculateFare(request.mode, request.distance),
           mode: request.mode,
           acceptedRequests: [request.id],
+          pickupCoordinates:request?.pickupCoordinates,
+          dropCoordinates:request?.dropCoordinates,
           createdAt: new Date().toISOString()
         };
       } else {

@@ -113,7 +113,7 @@ export default function CurrentRide({ uid }) {
 
     try {
       const chatRef = await addDoc(collection(db, "chats"), {
-        rideId: driverData.currentRide.requestId || `ride_${Date.now()}`,
+        // rideId: driverData.currentRide.requestId || `ride_${Date.now()}`,
         driverId: uid,
         passengerIds: driverData.currentRide.passengers.map(p => p.id),
         createdAt: serverTimestamp()
