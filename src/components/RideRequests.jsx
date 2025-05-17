@@ -1,28 +1,27 @@
 // src/components/RideRequests.js
 import React from "react";
-import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
 
 export default function RideRequests({ uid }) {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [driverMode, setDriverMode] = useState(null);
+  const [driverData, setDriverData] = useState(null);
 
   useEffect(() => {
-    // First get the driver's current mode
     const driverUnsub = onSnapshot(doc(db, "drivers", uid), (driverSnap) => {
       if (driverSnap.exists()) {
-        setDriverMode(driverSnap.data().mode || 'cab');
+        setDriverData(driverSnap.data());
       }
     });
 
-    // Then get requests that match the driver's mode
     const requestsUnsub = onSnapshot(collection(db, "requests"), (snap) => {
       const filteredRequests = snap.docs
         .filter(doc => {
           const data = doc.data();
-          return data.status === 'pending' && data.mode === driverMode;
+          // Only show pending requests matching driver's mode
+          return data.status === 'pending' && data.mode === driverData?.mode;
         })
         .map(doc => ({ id: doc.id, ...doc.data() }));
       setRequests(filteredRequests);
@@ -33,31 +32,69 @@ export default function RideRequests({ uid }) {
       driverUnsub();
       requestsUnsub();
     };
-  }, [uid, driverMode]);
+  }, [uid, driverData?.mode]);
 
   const handleAccept = async (request) => {
     try {
-      // Add to driver's currentRide
-      await updateDoc(doc(db, "drivers", uid), {
-        currentRide: {
+      const currentRide = driverData?.currentRide;
+      const isAutoMode = driverData?.mode === 'auto';
+      
+      if (currentRide && !isAutoMode) {
+        alert("You can only have one active ride in cab mode");
+        return;
+      }
+
+      // Calculate available seats
+      const maxSeats = isAutoMode ? 4 : 1;
+      const currentPassengers = currentRide?.passengers?.length || 0;
+      const availableSeats = maxSeats - currentPassengers;
+
+      if (currentRide && availableSeats <= 0) {
+        alert("No available seats left in your auto");
+        return;
+      }
+
+      // Prepare passenger data
+      const passenger = {
+        id: request.riderId,
+        name: request.riderName,
+        phone: request.phoneNumber
+      };
+
+      // Update driver document
+      const updateData = {
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!currentRide) {
+        // New ride
+        updateData.currentRide = {
           pickup: request.pickupLocation,
           drop: request.destination,
           status: "accepted",
-          passengers: [{
-            id: request.riderId,
-            name: request.riderName,
-            phone: request.phoneNumber
-          }],
-          route: request.mode === 'auto' ? `${request.pickupLocation} to ${request.destination}` : '',
+          passengers: [passenger],
+          route: isAutoMode ? `${request.pickupLocation} to ${request.destination}` : '',
           fare: calculateFare(request.mode, request.distance),
           mode: request.mode,
-          requestId: request.id, // Store the request ID for completion
+          acceptedRequests: [request.id],
           createdAt: new Date().toISOString()
-        },
-        updatedAt: new Date().toISOString()
-      });
+        };
+      } else {
+        // Existing ride (auto mode only)
+        updateData["currentRide.passengers"] = arrayUnion(passenger);
+        updateData["currentRide.acceptedRequests"] = arrayUnion(request.id);
+        updateData["currentRide.fare"] = (currentRide.fare || 0) + calculateFare(request.mode, request.distance);
+        
+        // Update route if needed
+        if (isAutoMode) {
+          updateData["currentRide.route"] = 
+            `${currentRide.pickup} → ${currentRide.drop} via ${request.pickupLocation}`;
+        }
+      }
 
-      // Update request status to 'accepted'
+      await updateDoc(doc(db, "drivers", uid), updateData);
+
+      // Update request status
       await updateDoc(doc(db, "requests", request.id), {
         status: 'accepted',
         acceptedAt: new Date().toISOString(),
@@ -81,13 +118,12 @@ export default function RideRequests({ uid }) {
   };
 
   const calculateFare = (mode, distance) => {
-    // Simple fare calculation - adjust as needed
     const baseFare = mode === 'auto' ? 30 : 50;
     const perKm = mode === 'auto' ? 12 : 18;
     return baseFare + (distance * perKm);
   };
 
-  if (loading || driverMode === null) return (
+  if (loading || !driverData) return (
     <div className="bg-white p-4 rounded-lg shadow">
       <h2 className="text-xl font-semibold mb-4">Loading requests...</h2>
       <div className="space-y-3">
@@ -109,12 +145,17 @@ export default function RideRequests({ uid }) {
     <div className="bg-white p-4 rounded-lg shadow">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold">
-          {driverMode === 'auto' ? 'Auto' : 'Cab'} Ride Requests
+          {driverData.mode === 'auto' ? 'Auto' : 'Cab'} Ride Requests
         </h2>
         <div className="flex items-center">
           <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full mr-2">
-            {driverMode.toUpperCase()} MODE
+            {driverData.mode.toUpperCase()} MODE
           </span>
+          {driverData.currentRide && driverData.mode === 'auto' && (
+            <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full mr-2">
+              {4 - (driverData.currentRide.passengers?.length || 0)} SEATS LEFT
+            </span>
+          )}
           <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
             {requests.length} Pending
           </span>
@@ -127,10 +168,10 @@ export default function RideRequests({ uid }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <h3 className="mt-2 text-lg font-medium text-gray-700">
-            No pending {driverMode} requests
+            No pending {driverData.mode} requests
           </h3>
           <p className="mt-1 text-gray-500">
-            New {driverMode} ride requests will appear here
+            New {driverData.mode} ride requests will appear here
           </p>
         </div>
       ) : (
@@ -165,7 +206,7 @@ export default function RideRequests({ uid }) {
                   <p className="font-medium">{request.distance} km</p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">Estimated Fare</p>
+                  <p className="text-xs text-gray-500">Fare</p>
                   <p className="font-medium">₹{calculateFare(request.mode, request.distance).toFixed(2)}</p>
                 </div>
               </div>
