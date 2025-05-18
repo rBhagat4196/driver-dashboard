@@ -20,7 +20,18 @@ export default function CurrentRide({ uid }) {
   const [newMessage, setNewMessage] = useState("");
   const [chatId, setChatId] = useState(null);
   const [availableSeats, setAvailableSeats] = useState(0);
+  const [passengers, setPassengers] = useState([]);
+  const [startAddress, setStartAddress] = useState("");
+  const [destinationAddress, setDestinationAddress] = useState("");
 
+  // Update these values only when driverData changes
+  useEffect(() => {
+    if (driverData?.currentRide) {
+      setPassengers(getPassengersData());
+      setStartAddress(getStartAddress());
+      setDestinationAddress(getDestinationAddress());
+    }
+  }, [driverData]); // Only run when driverData changes
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "drivers", uid), (snap) => {
       if (snap.exists()) {
@@ -41,7 +52,7 @@ export default function CurrentRide({ uid }) {
       }
     });
     return () => unsub();
-  }, []);
+  }, [uid]);
 
   // Listen for chat messages when chatId is available
   useEffect(() => {
@@ -253,11 +264,8 @@ export default function CurrentRide({ uid }) {
     );
   }
 
-  const passengers = getPassengersData();
-  const startAddress = getStartAddress();
-  const destinationAddress = getDestinationAddress();
 
-  console.log(startAddress, passengers, destinationAddress);
+  // console.log(startAddress, passengers, destinationAddress);
   return (
     <div className="bg-white p-4 rounded shadow">
       <div className="flex justify-between items-start mb-3">
@@ -415,12 +423,13 @@ export default function CurrentRide({ uid }) {
         </div>
       </div>
 
-      {/* <RoutesMap
+      <RoutesMap
         driverLocation={driverData.currentAddress}
         passengers={passengers}
         startAddress={startAddress}
-        endAddress={destinationAddress}
-      /> */}
+        mode = {driverData?.mode}
+        // endAddress={destinationAddress}
+      />
 
       <div className="mt-4 pt-3 border-t">
         <button
