@@ -3,7 +3,7 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useNavigate, Link } from "react-router-dom";
-import { FaUser, FaCar, FaEnvelope, FaLock, FaArrowRight } from "react-icons/fa";
+import { FaUser, FaCar, FaEnvelope, FaLock, FaPhone, FaArrowRight } from "react-icons/fa";
 import { motion } from "framer-motion";
 
 export default function Register() {
@@ -11,7 +11,9 @@ export default function Register() {
     email: "", 
     password: "", 
     name: "", 
-    vehicle: "" 
+    vehicle: "",
+    phoneNo: "",
+    mode: "cab" // Default to cab mode
   });
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -21,7 +23,7 @@ export default function Register() {
     e.preventDefault();
     setError("");
     setIsLoading(true);
-    const { email, password, name, vehicle } = form;
+    const { email, password, name, vehicle, phoneNo, mode } = form;
 
     try {
       const userCred = await createUserWithEmailAndPassword(auth, email, password);
@@ -29,7 +31,11 @@ export default function Register() {
         email,
         name,
         vehicle,
-        createdAt: new Date().toISOString()
+        phoneNo,
+        mode,
+        rating: 0,
+        createdAt: new Date().toISOString(),
+        previousRides: []
       });
       navigate("/dashboard");
     } catch (err) {
@@ -76,6 +82,23 @@ export default function Register() {
           </div>
 
           <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Phone Number</label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <FaPhone className="text-gray-400" />
+              </div>
+              <input
+                type="tel"
+                placeholder="+91 9876543210"
+                required
+                value={form.phoneNo}
+                onChange={(e) => setForm({ ...form, phoneNo: e.target.value })}
+                className="w-full pl-10 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Vehicle Type</label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -89,6 +112,34 @@ export default function Register() {
                 onChange={(e) => setForm({ ...form, vehicle: e.target.value })}
                 className="w-full pl-10 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Driver Mode</label>
+            <div className="flex space-x-4">
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, mode: "cab" })}
+                className={`flex-1 py-2 px-4 rounded-lg border ${
+                  form.mode === "cab" 
+                    ? "bg-blue-100 border-blue-500 text-blue-700" 
+                    : "bg-gray-50 border-gray-300 text-gray-700"
+                }`}
+              >
+                Cab
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, mode: "auto" })}
+                className={`flex-1 py-2 px-4 rounded-lg border ${
+                  form.mode === "auto" 
+                    ? "bg-green-100 border-green-500 text-green-700" 
+                    : "bg-gray-50 border-gray-300 text-gray-700"
+                }`}
+              >
+                Auto
+              </button>
             </div>
           </div>
 

@@ -1,50 +1,102 @@
 import React, { useState, useEffect } from "react";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import { FaCar, FaMapMarkerAlt } from "react-icons/fa";
+import { FaCar, FaMapMarkerAlt, FaUser } from "react-icons/fa";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
-// Fix marker icon issue in Leaflet + React
-// delete L.Icon.Default.prototype._getIconUrl;
-// L.Icon.Default.mergeOptions({
-//   iconRetinaUrl: require("leaflet/dist/images/marker-icon-2x.png"),
-//   iconUrl: require("leaflet/dist/images/marker-icon.png"),
-//   shadowUrl: require("leaflet/dist/images/marker-shadow.png"),
-// });
+// Fix leaflet marker icons
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
+
+// Custom driver icon
+const driverIcon = new L.Icon({
+  iconUrl: "https://cdn-icons-png.flaticon.com/512/4474/4474284.png",
+  iconSize: [32, 32],
+  iconAnchor: [16, 32],
+  popupAnchor: [0, -32]
+});
 
 export default function DriverInfo({ uid }) {
-  const [info, setInfo] = useState(null);
+  const [driverData, setDriverData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [currentLocation, setCurrentLocation] = useState(null);
   const [locationError, setLocationError] = useState(null);
   const [isUpdatingLocation, setIsUpdatingLocation] = useState(false);
+  const [mapKey, setMapKey] = useState(0);
+  
+  // Default to Mumbai coordinates if no location is set
+  const [currentCoords, setCurrentCoords] = useState({
+    latitude: 19.0760,
+    longitude: 72.8777
+  });
 
+  // Fetch driver data including location
   useEffect(() => {
-    const fetchDriverInfo = async () => {
+    const fetchDriverData = async () => {
       try {
         const docRef = doc(db, "drivers", uid);
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
-          setInfo(docSnap.data());
-          if (docSnap.data().currentLocation) {
-            setCurrentLocation(docSnap.data().currentLocation);
+          const data = docSnap.data();
+          setDriverData(data);
+
+          // Try to set location from different sources
+          if (data.currentLocation) {
+            // Use stored coordinates if available
+            setCurrentCoords({
+              latitude: data.currentLocation.latitude,
+              longitude: data.currentLocation.longitude
+            });
+          } else if (data.currentAddress) {
+            // Geocode address if coordinates not available
+            const coords = await geocodeAddress(data.currentAddress);
+            if (coords) {
+              setCurrentCoords(coords);
+            }
           }
+          setMapKey(prev => prev + 1); // Force map re-render
         } else {
-          console.warn("No driver data found");
+          console.error("No driver document found");
         }
       } catch (err) {
-        console.error("Failed to fetch driver info:", err);
+        console.error("Error fetching driver data:", err);
+        setLocationError("Failed to load driver information");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchDriverInfo();
+    fetchDriverData();
   }, [uid]);
 
+  // Geocode address string to coordinates
+  const geocodeAddress = async (address) => {
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`
+      );
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        return {
+          latitude: parseFloat(data[0].lat),
+          longitude: parseFloat(data[0].lon)
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error("Geocoding error:", error);
+      return null;
+    }
+  };
+
+  // Update driver's current location
   const updateDriverLocation = async () => {
     if (!navigator.geolocation) {
       setLocationError("Geolocation is not supported by your browser");
@@ -59,42 +111,48 @@ export default function DriverInfo({ uid }) {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
           timeout: 10000,
-          maximumAge: 0,
+          maximumAge: 0
         });
       });
 
-      const newLocation = {
+      const newCoords = {
         latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        timestamp: new Date().toISOString(),
+        longitude: position.coords.longitude
       };
 
-      setCurrentLocation(newLocation);
+      // Get readable address from coordinates
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${newCoords.latitude}&lon=${newCoords.longitude}`
+      );
+      const addressData = await response.json();
+      const address = addressData.display_name || "Current Location";
 
-      const driverRef = doc(db, "drivers", uid);
-      await updateDoc(driverRef, {
-        currentLocation: newLocation,
-        lastUpdated: new Date().toISOString(),
-      });
+      // Update Firestore
+      const updateData = {
+        currentAddress: address,
+        currentLocation: newCoords,
+        lastUpdated: new Date().toISOString()
+      };
+
+      await updateDoc(doc(db, "drivers", uid), updateData);
+
+      // Update local state
+      setDriverData(prev => ({
+        ...prev,
+        ...updateData
+      }));
+      setCurrentCoords(newCoords);
+      setMapKey(prev => prev + 1);
+
     } catch (err) {
-      console.error("Error getting location:", err);
-      setLocationError("Unable to retrieve your location");
+      console.error("Error updating location:", err);
+      setLocationError("Failed to update location. Please try again.");
     } finally {
       setIsUpdatingLocation(false);
     }
   };
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (info?.mode === "cab" || info?.mode === "auto") {
-        updateDriverLocation();
-      }
-    }, 300000);
-
-    return () => clearInterval(interval);
-  }, [info?.mode]);
-
-  if (loading)
+  if (loading) {
     return (
       <div className="bg-white p-6 rounded-lg shadow-md animate-pulse">
         <div className="h-6 w-1/3 bg-gray-200 rounded mb-4"></div>
@@ -105,149 +163,112 @@ export default function DriverInfo({ uid }) {
         </div>
       </div>
     );
+  }
 
-  if (!info)
+  if (!driverData) {
     return (
       <div className="bg-white p-6 rounded-lg shadow-md text-center">
-        <h3 className="mt-2 text-lg font-medium text-gray-700">
-          No driver info found
-        </h3>
-        <p className="mt-1 text-gray-500">
-          We couldn't load the driver details
-        </p>
+        <h3 className="text-lg font-medium text-gray-700">Driver not found</h3>
+        <p className="mt-2 text-gray-500">Could not load driver information</p>
       </div>
     );
+  }
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-800">Driver Profile</h2>
-        <span className="px-3 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
-          {info.mode === "auto" ? "AUTO" : "CAB"} MODE
+        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+          driverData.mode === "auto" 
+            ? "bg-green-100 text-green-800" 
+            : "bg-blue-100 text-blue-800"
+        }`}>
+          {driverData.mode?.toUpperCase() || "CAB"} MODE
         </span>
       </div>
 
-      <div className="space-y-4">
-        {/* Driver Name */}
+      <div className="space-y-5">
+        {/* Driver Information */}
         <div className="flex items-center">
-          <div className="bg-blue-100 p-2 rounded-lg mr-3">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5 text-blue-600"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-              />
-            </svg>
+          <div className="bg-blue-100 p-3 rounded-lg mr-4">
+            <FaUser className="h-5 w-5 text-blue-600" />
           </div>
           <div>
             <p className="text-sm text-gray-500">Driver Name</p>
-            <p className="font-medium">{info.name}</p>
+            <p className="font-medium">
+              {driverData.name || "Name not available"}
+            </p>
           </div>
         </div>
 
-        {/* Email */}
+        {/* Vehicle Information */}
         <div className="flex items-center">
-          <div className="bg-green-100 p-2 rounded-lg mr-3">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5 text-green-600"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-              />
-            </svg>
-          </div>
-          <div>
-            <p className="text-sm text-gray-500">Email</p>
-            <p className="font-medium">{info.email}</p>
-          </div>
-        </div>
-
-        {/* Vehicle */}
-        <div className="flex items-center">
-          <div className="bg-purple-100 p-2 rounded-lg mr-3">
+          <div className="bg-purple-100 p-3 rounded-lg mr-4">
             <FaCar className="h-5 w-5 text-purple-600" />
           </div>
           <div>
-            <p className="text-sm text-gray-500">Vehicle Number</p>
-            <p className="font-medium">{info.vehicle}</p>
+            <p className="text-sm text-gray-500">Vehicle</p>
+            <p className="font-medium">
+              {driverData.vehicle || "Not specified"}
+            </p>
           </div>
         </div>
 
-        {/* Location on Map */}
+        {/* Location Section */}
         <div className="flex items-start">
-          <div className="bg-red-100 p-2 rounded-lg mr-3">
+          <div className="bg-red-100 p-3 rounded-lg mr-4">
             <FaMapMarkerAlt className="h-5 w-5 text-red-600" />
           </div>
           <div className="flex-1">
-            <div className="flex justify-between items-start">
+            <div className="flex justify-between items-start mb-2">
               <div>
                 <p className="text-sm text-gray-500">Current Location</p>
-                {currentLocation ? (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Last updated:{" "}
-                    {new Date(currentLocation.timestamp).toLocaleTimeString()}
-                  </p>
-                ) : (
-                  <p className="text-gray-400">Location not available</p>
-                )}
+                <p className="font-medium">
+                  {driverData.currentAddress || "Location not set"}
+                </p>
               </div>
               <button
                 onClick={updateDriverLocation}
                 disabled={isUpdatingLocation}
-                className={`ml-2 px-3 py-1 text-sm rounded-md ${
+                className={`px-3 py-1 rounded-md text-sm ${
                   isUpdatingLocation
                     ? "bg-gray-200 text-gray-500"
                     : "bg-blue-600 text-white hover:bg-blue-700"
                 }`}
               >
-                {isUpdatingLocation ? "Updating..." : "Update Location"}
+                {isUpdatingLocation ? "Updating..." : "Update"}
               </button>
             </div>
+
             {locationError && (
-              <p className="text-xs text-red-500 mt-1">{locationError}</p>
+              <p className="text-xs text-red-500 mb-2">{locationError}</p>
             )}
 
-            {/* Map Rendering */}
-            {currentLocation && (
-              <div className="mt-4 h-64 rounded overflow-hidden shadow border">
-                <MapContainer
-                  center={[currentLocation.latitude, currentLocation.longitude]}
-                  zoom={15}
-                  scrollWheelZoom={false}
-                  style={{ height: "100%", width: "100%" }}
+            {/* Map Container */}
+            <div className="mt-3 h-64 rounded-lg overflow-hidden border border-gray-200">
+              <MapContainer
+                key={mapKey}
+                center={[currentCoords.latitude, currentCoords.longitude]}
+                zoom={15}
+                style={{ height: "100%", width: "100%" }}
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <Marker 
+                  position={[currentCoords.latitude, currentCoords.longitude]}
+                  icon={driverIcon}
                 >
-                  <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  />
-                  <Marker
-                    position={[
-                      currentLocation.latitude,
-                      currentLocation.longitude,
-                    ]}
-                  >
-                    <Popup>
-                      Driver is here 🚖 <br />
-                      {info.name}
-                    </Popup>
-                  </Marker>
-                </MapContainer>
-              </div>
-            )}
+                  <Popup className="text-sm">
+                    <div className="font-medium">{driverData.name || "Driver"}</div>
+                    <div className="text-gray-600">
+                      {driverData.currentAddress || "Current location"}
+                    </div>
+                  </Popup>
+                </Marker>
+              </MapContainer>
+            </div>
           </div>
         </div>
       </div>

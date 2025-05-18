@@ -20,14 +20,28 @@ export default function EarningsHistory({ uid }) {
 
   if (!driverData) return <div className="bg-white p-4 rounded shadow">Loading earnings data...</div>;
 
-  // Get earnings from previousRides or a dedicated earnings array
-  const earningsData = driverData.previousRides?.map(ride => ({
-    date: ride.completedAt || ride.createdAt,
-    amount: ride.fare || 0,
+  // Get earnings from previousRides or currentRide passengers
+  const earningsData = [
+  // Add current ride passengers if exists
+  ...(driverData.currentRide?.passengers?.map(passenger => ({
+    date: new Date().toISOString(), // current ride is ongoing
+    amount: passenger.fare || 0,
+    mode: driverData.mode,
+    from: passenger.pickupAddress,
+    to: passenger.dropAddress,
+    status: 'ongoing'
+  })) || []),
+
+  // Add previous rides
+  ...(driverData.previousRides?.map(ride => ({
+    date: ride.completedAt || new Date().toISOString(),
+    amount: ride.totalFare || 0,
     mode: ride.mode || driverData.mode,
-    from: ride.pickup,
-    to: ride.drop
-  })) || [];
+    from: ride.startAddress,
+    to: ride.destinationAddress,
+    status: 'completed'
+  })) || [])
+]; // 🔥 THIS was missing
 
   // Sort by date (newest first)
   const sortedEarnings = [...earningsData].sort((a, b) => 
@@ -60,6 +74,9 @@ export default function EarningsHistory({ uid }) {
                     <p className="font-medium">₹{e.amount?.toFixed(2) || '0.00'}</p>
                     <p className="text-sm text-gray-500">
                       {new Date(e.date).toLocaleDateString()}
+                      {e.status === 'ongoing' && (
+                        <span className="ml-2 bg-yellow-100 text-yellow-800 text-xs px-1 rounded">Ongoing</span>
+                      )}
                     </p>
                   </div>
                   <span className={`px-2 py-1 rounded-full text-xs ${

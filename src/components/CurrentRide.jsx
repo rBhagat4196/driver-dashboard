@@ -1,6 +1,13 @@
-// src/components/CurrentRide.js
 import React from "react";
-import { doc, updateDoc, arrayUnion, onSnapshot, collection, addDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  updateDoc,
+  arrayUnion,
+  onSnapshot,
+  collection,
+  addDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import RoutesMap from "./RoutesMap";
@@ -19,10 +26,10 @@ export default function CurrentRide({ uid }) {
       if (snap.exists()) {
         const data = snap.data();
         setDriverData(data);
-        
+
         // Calculate available seats
         if (data.currentRide) {
-          const maxSeats = data.mode === 'auto' ? 4 : 1; // Auto can have 4 seats, cab has 1
+          const maxSeats = data.mode === "auto" ? 4 : 1;
           const occupiedSeats = data.currentRide.passengers?.length || 0;
           setAvailableSeats(maxSeats - occupiedSeats);
         }
@@ -34,57 +41,90 @@ export default function CurrentRide({ uid }) {
       }
     });
     return () => unsub();
-  }, [uid]);
+  }, []);
 
   // Listen for chat messages when chatId is available
   useEffect(() => {
     if (!chatId) return;
 
-    const messagesUnsub = onSnapshot(
-      collection(db, "chats", chatId, "messages"),
-      (snap) => {
-        const chatMessages = snap.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })).sort((a, b) => a.timestamp?.toDate() - b.timestamp?.toDate());
-        setMessages(chatMessages);
+    const chatUnsub = onSnapshot(doc(db, "chats", chatId), (snap) => {
+      if (snap.exists()) {
+        const chatData = snap.data();
+        setMessages(chatData.messages || []);
       }
-    );
+    });
 
-    return () => messagesUnsub();
+    return () => chatUnsub();
   }, [chatId]);
 
   const completeRide = async () => {
     if (!driverData?.currentRide) return;
-    
+
     setIsCompleting(true);
     try {
+      const completedAt = new Date().toISOString();
+
+      const totalFare =
+        driverData.currentRide.passengers?.reduce(
+          (sum, passenger) => sum + (Number(passenger.fare) || 0),
+          0
+        ) || 0;
+
+      const totalDistance =
+        driverData.currentRide.passengers?.reduce(
+          (sum, passenger) => sum + (Number(passenger.distance) || 0),
+          0
+        ) || 0;
+
       const completedRide = {
-        ...driverData.currentRide,
+        totalFare,
+        mode: driverData.mode,
+        totalDistance,
+        startAddress: getStartAddress(),
+        destinationAddress: getDestinationAddress(),
+        completedAt,
         status: "completed",
-        completedAt: new Date().toISOString()
+        rating: null,
+        driverId: uid,
+        vehicle: driverData.vehicle,
       };
 
       // Update the driver document
       await updateDoc(doc(db, "drivers", uid), {
         previousRides: arrayUnion(completedRide),
         currentRide: null,
-        updatedAt: new Date().toISOString()
+        updatedAt: serverTimestamp(),
       });
 
-      // Update all accepted requests to completed
-      if (driverData.currentRide.acceptedRequests) {
-  await Promise.all(
-    driverData.currentRide.acceptedRequests.map(requestId => 
-      updateDoc(doc(db, "requests", requestId), {
-        status: "completed",
-        completedAt: new Date().toISOString()
-      })
-    )
-  );
-}
+      // Process all passengers
+      if (driverData.currentRide.passengers) {
+        await Promise.all(
+          driverData.currentRide.passengers.map(async (passenger) => {
+            if (!passenger.RiderId) return;
 
+            // Create rider's completed ride record
+            const riderCompletedRide = {
+              fare: passenger.fare,
+              distance: passenger.distance,
+              pickupAddress: passenger.pickupAddress,
+              dropAddress: passenger.dropAddress,
+              completedAt,
+              driverId: uid,
+              driverName: driverData.name,
+              vehicle: driverData.vehicle,
+              mode: driverData.mode,
+              rating: null,
+            };
 
+            // Update rider's previous rides
+            const riderRef = doc(db, "riders", passenger.RiderId);
+            await updateDoc(riderRef, {
+              previousRides: arrayUnion(riderCompletedRide),
+              updatedAt: serverTimestamp(),
+            });
+          })
+        );
+      }
     } catch (error) {
       console.error("Error completing ride:", error);
     } finally {
@@ -92,16 +132,46 @@ export default function CurrentRide({ uid }) {
     }
   };
 
+  const getStartAddress = () => {
+    if (!driverData?.currentRide?.passengers?.length) return "Unknown";
+
+    if (driverData.mode === "auto") {
+      return driverData.currentAddress || "Current location";
+    } else {
+      return (
+        driverData.currentRide.passengers[0]?.pickupAddress || "Pickup location"
+      );
+    }
+  };
+
+  const getDestinationAddress = () => {
+    if (!driverData?.currentRide?.passengers?.length) return "Unknown";
+
+    if (driverData.mode === "auto") {
+      const lastPassenger =
+        driverData.currentRide.passengers[
+          driverData.currentRide.passengers.length - 1
+        ];
+      return lastPassenger?.dropAddress || "Destination";
+    } else {
+      return driverData.currentRide.passengers[0]?.dropAddress || "Destination";
+    }
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !chatId) return;
 
     try {
-      await addDoc(collection(db, "chats", chatId, "messages"), {
-        text: newMessage,
-        senderId: uid,
-        senderName: driverData?.name || "Driver",
-        timestamp: serverTimestamp()
+      await updateDoc(doc(db, "chats", chatId), {
+        messages: arrayUnion({
+          text: newMessage,
+          senderId: uid,
+          senderName: driverData?.name || "Driver",
+          timestamp: new Date().toISOString(), // Client-side timestamp
+        }),
+        updatedAt: serverTimestamp(), // Track last update time
       });
+
       setNewMessage("");
     } catch (error) {
       console.error("Error sending message:", error);
@@ -112,16 +182,21 @@ export default function CurrentRide({ uid }) {
     if (!driverData?.currentRide || driverData.currentRide.chatId) return;
 
     try {
+      // Filter out any undefined passenger IDs
+      // const passengerIds =
+      //   driverData.currentRide.passengers
+      //     ?.map((p) => p.RiderId)
+      //     .filter((id) => id !== undefined) || [];
+
       const chatRef = await addDoc(collection(db, "chats"), {
-        // rideId: driverData.currentRide.requestId || `ride_${Date.now()}`,
-        driverId: uid,
-        passengerIds: driverData.currentRide.passengers.map(p => p.id),
-        createdAt: serverTimestamp()
+        messages: [],
+        rideId: `ride_${Date.now()}`,
+        createdAt: serverTimestamp(),
       });
 
       await updateDoc(doc(db, "drivers", uid), {
         "currentRide.chatId": chatRef.id,
-        updatedAt: new Date().toISOString()
+        updatedAt: serverTimestamp(),
       });
 
       setChatId(chatRef.id);
@@ -129,78 +204,84 @@ export default function CurrentRide({ uid }) {
       console.error("Error initializing chat:", error);
     }
   };
-// function passengers data here like, id, name, pickup, drop
 
-// function for driver address
-const getPassengersData = () => {
+  const getPassengersData = () => {
     if (!driverData?.currentRide?.passengers) return [];
-    
-    return driverData.currentRide.passengers.map(passenger => ({
-      id: passenger.id,
-      name: passenger.name || 'Passenger',
-      pickup: passenger?.pickupCoordinates || driverData.currentRide.pickupCoordinates,
-      drop: passenger?.dropCoordinates || driverData.currentRided.dropCoordinates,
+
+    return driverData.currentRide.passengers.map((passenger, index) => ({
+      id: passenger.RiderId || `passenger-${index}`,
+      name: passenger.name || `Passenger ${index + 1}`,
+      pickup: passenger.pickupAddress,
+      drop: passenger.dropAddress,
+      fare: passenger.fare,
+      distance: passenger.distance,
     }));
   };
 
-  // Function to get driver address data
-  const getDriverAddress = () => {
-    if (!driverData) return null;
-    
-    return {
-      latitude: driverData.currentLocation?.latitude || null,
-      longitude: driverData.currentLocation?.longitude || null
-    };
-  };
-
-  // Get the processed data
-  const passengers = getPassengersData();
-  const driverAddress = getDriverAddress();
-
-  // console.log(passengers);
-  // console.log(driverAddress)
   useEffect(() => {
     if (driverData?.currentRide && !chatId) {
       initializeChat();
     }
   }, [driverData?.currentRide, chatId]);
 
-  if (!driverData) return <div className="bg-white p-4 rounded shadow">Loading ride data...</div>;
+  if (!driverData) {
+    return (
+      <div className="bg-white p-4 rounded shadow">Loading ride data...</div>
+    );
+  }
 
   const currentRide = driverData.currentRide || null;
 
-  if (!currentRide) return (
-    <div className="bg-white p-4 rounded shadow">
-      <h2 className="text-xl font-semibold mb-2">Current Ride</h2>
-      <p className="text-gray-500">No active ride at the moment</p>
-      <p className="text-sm mt-1">
-        Mode: <span className={`px-2 py-0.5 rounded text-xs ${
-          driverData.mode === 'auto' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
-        }`}>
-          {driverData.mode?.toUpperCase() || 'CAB'}
-        </span>
-      </p>
-    </div>
-  );
+  if (!currentRide) {
+    return (
+      <div className="bg-white p-4 rounded shadow">
+        <h2 className="text-xl font-semibold mb-2">Current Ride</h2>
+        <p className="text-gray-500">No active ride at the moment</p>
+        <p className="text-sm mt-1">
+          Mode:{" "}
+          <span
+            className={`px-2 py-0.5 rounded text-xs ${
+              driverData.mode === "auto"
+                ? "bg-green-100 text-green-800"
+                : "bg-blue-100 text-blue-800"
+            }`}
+          >
+            {driverData.mode?.toUpperCase() || "CAB"}
+          </span>
+        </p>
+      </div>
+    );
+  }
 
+  const passengers = getPassengersData();
+  const startAddress = getStartAddress();
+  const destinationAddress = getDestinationAddress();
+
+  console.log(startAddress, passengers, destinationAddress);
   return (
     <div className="bg-white p-4 rounded shadow">
       <div className="flex justify-between items-start mb-3">
         <h2 className="text-xl font-semibold">Current Ride</h2>
         <div className="flex items-center space-x-2">
-          <span className={`px-2 py-1 rounded-full text-xs ${
-            currentRide.status === 'completed' ? 'bg-green-100 text-green-800' :
-            currentRide.status === 'in-progress' ? 'bg-blue-100 text-blue-800' :
-            'bg-yellow-100 text-yellow-800'
-          }`}>
-            {currentRide.status?.toUpperCase() || 'ACTIVE'}
+          <span
+            className={`px-2 py-1 rounded-full text-xs ${
+              currentRide.status === "completed"
+                ? "bg-green-100 text-green-800"
+                : "bg-yellow-100 text-yellow-800"
+            }`}
+          >
+            {currentRide.status?.toUpperCase() || "IN PROGRESS"}
           </span>
-          <span className={`px-2 py-1 rounded-full text-xs ${
-            currentRide.mode === 'auto' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
-          }`}>
-            {currentRide.mode?.toUpperCase() || 'CAB'}
+          <span
+            className={`px-2 py-1 rounded-full text-xs ${
+              driverData.mode === "auto"
+                ? "bg-green-100 text-green-800"
+                : "bg-blue-100 text-blue-800"
+            }`}
+          >
+            {driverData.mode?.toUpperCase() || "CAB"}
           </span>
-          {currentRide.mode === 'auto' && (
+          {driverData.mode === "auto" && (
             <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800">
               {availableSeats} SEATS LEFT
             </span>
@@ -211,50 +292,65 @@ const getPassengersData = () => {
       <div className="grid grid-cols-2 gap-4 mb-3">
         <div>
           <p className="text-sm text-gray-500 font-medium">From</p>
-          <p>{currentRide.pickup}</p>
+          <p>{startAddress}</p>
         </div>
         <div>
           <p className="text-sm text-gray-500 font-medium">To</p>
-          <p>{currentRide.drop}</p>
+          <p>{destinationAddress}</p>
         </div>
       </div>
 
-      {currentRide.mode === 'auto' && currentRide.route && (
+      {currentRide.totalDistance && (
         <div className="mb-3">
-          <p className="text-sm text-gray-500 font-medium">Route</p>
-          <p>{currentRide.route}</p>
+          <p className="text-sm text-gray-500 font-medium">Distance</p>
+          <p>{currentRide.totalDistance} km</p>
         </div>
       )}
 
-      {currentRide.fare && (
+      {currentRide.totalFare && (
         <div className="mb-3">
           <p className="text-sm text-gray-500 font-medium">Total Fare</p>
-          <p>₹{currentRide.fare.toFixed(2)}</p>
+          <p>₹{currentRide.totalFare.toFixed(2)}</p>
         </div>
       )}
 
       {currentRide.passengers?.length > 0 && (
         <div className="border-t pt-3">
-          <button 
+          <button
             onClick={() => setShowPassengers(!showPassengers)}
             className="flex items-center text-sm font-medium"
           >
             Passengers ({currentRide.passengers.length})
-            <span className="ml-1">{showPassengers ? '▲' : '▼'}</span>
+            <span className="ml-1">{showPassengers ? "▲" : "▼"}</span>
           </button>
-          
+
           {showPassengers && (
             <ul className="mt-2 space-y-2">
               {currentRide.passengers.map((passenger, index) => (
-                <li key={index} className="flex items-center">
-                  <span className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs mr-2">
-                    {index + 1}
-                  </span>
-                  <div>
-                    <p>{passenger.name || `Passenger ${index + 1}`}</p>
-                    {passenger.phone && (
-                      <p className="text-xs text-gray-500">{passenger.phone}</p>
-                    )}
+                <li
+                  key={passenger.RiderId || `passenger-${index}`}
+                  className="flex justify-between items-center p-2 bg-gray-50 rounded"
+                >
+                  <div className="flex items-center">
+                    <span className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs mr-2">
+                      {index + 1}
+                    </span>
+                    <div>
+                      <p className="font-medium">
+                        {passenger.name || `Passenger ${index + 1}`}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {passenger.pickupAddress} → {passenger.dropAddress}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium">
+                      ₹{passenger.fare?.toFixed(2)}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {passenger.distance} km
+                    </p>
                   </div>
                 </li>
               ))}
@@ -263,30 +359,37 @@ const getPassengersData = () => {
         </div>
       )}
 
-      {/* Chat System */}
       <div className="mt-4 border-t pt-3">
         <h3 className="font-medium mb-2">Ride Chat</h3>
-        <div className="bg-gray-50 rounded-lg p-3 mb-2" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+        <div
+          className="bg-gray-50 rounded-lg p-3 mb-2"
+          style={{ maxHeight: "200px", overflowY: "auto" }}
+        >
           {messages.length === 0 ? (
             <p className="text-gray-500 text-center py-4">No messages yet</p>
           ) : (
             <div className="space-y-2">
-              {messages.map((message) => (
-                <div 
-                  key={message.id} 
-                  className={`flex ${message.senderId === uid ? 'justify-end' : 'justify-start'}`}
+              {messages.map((message, index) => (
+                <div
+                  key={index}
+                  className={`flex ${
+                    message.senderId === uid ? "justify-end" : "justify-start"
+                  }`}
                 >
-                  <div 
+                  <div
                     className={`max-w-xs p-2 rounded-lg ${
-                      message.senderId === uid 
-                        ? 'bg-blue-500 text-white' 
-                        : 'bg-gray-200 text-gray-800'
+                      message.senderId === uid
+                        ? "bg-blue-500 text-white"
+                        : "bg-gray-200 text-gray-800"
                     }`}
                   >
                     <p className="text-sm">{message.text}</p>
                     <p className="text-xs opacity-70 mt-1">
-                      {message.senderName} •{' '}
-                      {message.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {message.senderName} •{" "}
+                      {message.timestamp?.toDate?.()?.toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      }) || "Just now"}
                     </p>
                   </div>
                 </div>
@@ -301,7 +404,7 @@ const getPassengersData = () => {
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder="Type your message..."
             className="flex-1 border rounded-l-lg p-2"
-            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+            onKeyPress={(e) => e.key === "Enter" && sendMessage()}
           />
           <button
             onClick={sendMessage}
@@ -311,16 +414,23 @@ const getPassengersData = () => {
           </button>
         </div>
       </div>
-      <RoutesMap driverLocation={driverAddress} passengers={passengers} />
+
+      {/* <RoutesMap
+        driverLocation={driverData.currentAddress}
+        passengers={passengers}
+        startAddress={startAddress}
+        endAddress={destinationAddress}
+      /> */}
+
       <div className="mt-4 pt-3 border-t">
         <button
           onClick={completeRide}
           disabled={isCompleting}
           className={`w-full py-2 px-4 rounded-md text-white font-medium ${
-            isCompleting ? 'bg-gray-400' : 'bg-green-500 hover:bg-green-600'
+            isCompleting ? "bg-gray-400" : "bg-green-500 hover:bg-green-600"
           }`}
         >
-          {isCompleting ? 'Completing Ride...' : 'Complete Ride'}
+          {isCompleting ? "Completing Ride..." : "Complete Ride"}
         </button>
       </div>
     </div>
