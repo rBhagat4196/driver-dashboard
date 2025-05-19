@@ -8,7 +8,7 @@ import {
   addDoc,
   serverTimestamp,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useState ,useRef} from "react";
 import { db } from "../firebase";
 import RoutesMap from "./RoutesMap";
 
@@ -23,7 +23,9 @@ export default function CurrentRide({ uid }) {
   const [passengers, setPassengers] = useState([]);
   const [startAddress, setStartAddress] = useState("");
   const [destinationAddress, setDestinationAddress] = useState("");
+  const messagesEndRef = useRef(null);
 
+ 
   // Update these values only when driverData changes
   useEffect(() => {
     if (driverData?.currentRide) {
@@ -62,12 +64,16 @@ export default function CurrentRide({ uid }) {
       if (snap.exists()) {
         const chatData = snap.data();
         setMessages(chatData.messages || []);
+        scrollToBottom();
       }
     });
 
     return () => chatUnsub();
   }, [chatId]);
 
+   const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
   const completeRide = async () => {
     if (!driverData?.currentRide) return;
 
@@ -189,11 +195,18 @@ export default function CurrentRide({ uid }) {
           text: newMessage,
           senderId: uid,
           senderName: driverData?.name || "Driver",
-          timestamp: new Date().toISOString(), // Client-side timestamp
+          timeStamp: new Date().toLocaleString("en-IN", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true,
+          }),
         }),
         updatedAt: serverTimestamp(), // Track last update time
       });
-
+      
       setNewMessage("");
     } catch (error) {
       console.error("Error sending message:", error);
@@ -404,10 +417,7 @@ export default function CurrentRide({ uid }) {
                     <p className="text-sm">{message.text}</p>
                     <p className="text-xs opacity-70 mt-1">
                       {message.senderName} •{" "}
-                      {message.timestamp?.toDate?.()?.toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      }) || "Just now"}
+                      {message.timeStamp}
                     </p>
                   </div>
                 </div>
