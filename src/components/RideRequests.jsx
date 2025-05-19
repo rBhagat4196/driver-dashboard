@@ -68,6 +68,14 @@ export default function RideRequests({ uid }) {
         distance: request.distance,
       };
 
+      const riderRef = doc(db,"riders",request.riderId);
+      await updateDoc(riderRef,{
+        notifications: arrayUnion({
+    text: "Ride request accepted",
+    timeStamp: Date.now(),
+    mark: "unread"
+  })
+      })
       // Update driver document
       const updateData = {
         updatedAt: new Date().toISOString(),
@@ -130,8 +138,8 @@ export default function RideRequests({ uid }) {
   };
 
   const calculateFare = (mode, distance) => {
-    const baseFare = mode === "auto" ? 30 : 50;
-    const perKm = mode === "auto" ? 12 : 18;
+    const baseFare = mode === "auto" ? 30 : 80;
+    const perKm = mode === "auto" ? 10 : 15;
     return baseFare + distance * perKm;
   };
 

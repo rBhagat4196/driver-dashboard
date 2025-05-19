@@ -111,25 +111,36 @@ export default function CurrentRide({ uid }) {
       if (driverData.currentRide.passengers) {
         await Promise.all(
           driverData.currentRide.passengers.map(async (passenger) => {
-            if (!passenger.RiderId) return;
+            if (!passenger.riderId) return;
 
             // Create rider's completed ride record
             const riderCompletedRide = {
-              fare: passenger.fare,
-              distance: passenger.distance,
-              pickupAddress: passenger.pickupAddress,
-              dropAddress: passenger.dropAddress,
+              totalFare: Number(passenger.fare),
+              totalDistance: Number(passenger.distance),
+              startAddress: passenger.pickupAddress,
+              destinationAddress: passenger.dropAddress,
               completedAt,
               driverId: uid,
-              driverName: driverData.name,
-              vehicle: driverData.vehicle,
               mode: driverData.mode,
               rating: null,
             };
 
+            // console.log("passenger Id",)
+            // request has been completed
+            const requestRef = doc(db, "requests", passenger.riderId);
+            await updateDoc(requestRef, {
+              status: "completed",
+            });
+
             // Update rider's previous rides
-            const riderRef = doc(db, "riders", passenger.RiderId);
+            const riderRef = doc(db, "riders", passenger.riderId);
             await updateDoc(riderRef, {
+              isPayment: true,
+              notifications: arrayUnion({
+                text: "Ride request accepted",
+                timeStamp: Date.now(),
+                mark: "unread",
+              }),
               previousRides: arrayUnion(riderCompletedRide),
               updatedAt: serverTimestamp(),
             });
@@ -263,7 +274,6 @@ export default function CurrentRide({ uid }) {
       </div>
     );
   }
-
 
   // console.log(startAddress, passengers, destinationAddress);
   return (
@@ -427,7 +437,7 @@ export default function CurrentRide({ uid }) {
         driverLocation={driverData.currentAddress}
         passengers={passengers}
         startAddress={startAddress}
-        mode = {driverData?.mode}
+        mode={driverData?.mode}
         // endAddress={destinationAddress}
       />
 
