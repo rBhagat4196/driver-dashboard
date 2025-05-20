@@ -112,6 +112,37 @@ export default function DriverDashboard() {
       {/* Mobile Header */}
       <header className="lg:hidden bg-blue-600 text-white p-4 flex justify-between items-center">
         <h1 className="text-xl font-bold">Driver Panel</h1>
+        <div className="flex gap-2">
+          <span className="text-center my-auto">{driver?.name}</span>
+        <div className="relative w-10 h-10 group">
+                    {driver?.profileURL ? (
+                      <div className="w-full h-full rounded-full overflow-hidden bg-blue-100 border border-gray-300 shadow-sm group-hover:brightness-90 transition">
+                        <img
+                          src={driver?.profileURL}
+                          alt="Profile"
+                          className="w-full h-full object-cover"
+                        />
+                        {/* "Edit" overlay on hover */}
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 text-white text-xs font-semibold opacity-0 group-hover:opacity-100 transition">
+                          Edit
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="w-full h-full rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold text-sm">
+                        {user?.displayName?.charAt(0)?.toUpperCase() ||
+                          user?.email?.charAt(0)?.toUpperCase()}
+                      </div>
+                    )}
+
+                    {/* Invisible file input covering the entire avatar */}
+                    <input
+                      id="file-upload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleUpload}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                  </div>
         <select
           value={activeTab}
           onChange={(e) => setActiveTab(e.target.value)}
@@ -123,6 +154,7 @@ export default function DriverDashboard() {
             </option>
           ))}
         </select>
+          </div>
       </header>
 
       <div className="flex flex-col lg:flex-row">
