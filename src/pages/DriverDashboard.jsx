@@ -3,7 +3,8 @@ import { useAuthState, useSignOut } from "react-firebase-hooks/auth";
 import { useNavigate } from "react-router-dom";
 import { auth } from "../firebase";
 import { FaSignOutAlt } from "react-icons/fa";
-
+import { db } from "../firebase";
+import { doc,updateDoc,getDoc} from "firebase/firestore";
 import DriverInfo from "../components/DriverInfo";
 import EarningsHistory from "../components/EarningsHistory";
 import CurrentRide from "../components/CurrentRide";
@@ -16,7 +17,7 @@ const tabs = [
   { id: "rideRequests", label: "Ride Requests", icon: "🔄" },
   { id: "earnings", label: "Earnings", icon: "💰" },
   { id: "autoStatus", label: "Auto Mode", icon: "⚙️" },
-  { id: "analytics", label: "Analytics", icon: "📊" }
+  { id: "analytics", label: "Analytics", icon: "📊" },
 ];
 
 export default function DriverDashboard() {
@@ -24,7 +25,11 @@ export default function DriverDashboard() {
   const [signOut, signOutLoading] = useSignOut(auth);
   const [activeTab, setActiveTab] = useState("info");
   const navigate = useNavigate();
-
+  const [imageUrl, setImageUrl] = useState(null);
+  const [upLoading, setUploading] = useState(false);
+  const [driver,setDriver] = useState(null);
+  const cloudName = import.meta.env.VITE_CLOUDNAME;
+  const unsignedPreset = import.meta.env.VITE_PRESET;
   useEffect(() => {
     if (!loading && !user) {
       navigate("/login");
@@ -40,6 +45,59 @@ export default function DriverDashboard() {
     }
   };
 
+  useEffect(() => {
+  const fetchDriver = async () => {
+    if (!user?.uid) return;
+
+    try {
+      const driverRef = doc(db, "drivers", user.uid);
+      const snapShot = await getDoc(driverRef);
+
+      if (snapShot.exists()) {
+        const data = snapShot.data();
+        setDriver(data); // ✅ set actual data
+      }
+    } catch (err) {
+      console.error("Error fetching driver data:", err);
+    }
+  };
+
+  fetchDriver();
+}, [user?.uid,imageUrl]); // ✅ use a reliable dependency
+
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    console.log(file);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_preset", unsignedPreset);
+
+    setUploading(true);
+    try {
+      const res = await fetch(
+        `https://api.cloudinary.com/v1_1/${cloudName}/upload`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const data = await res.json();
+      console.log(data);
+      setImageUrl(data.secure_url);
+      const driverRef = doc(db,"drivers",user.uid);
+      await updateDoc(driverRef,{
+        profileURL : data.secure_url
+      })
+    } catch (err) {
+      console.error("Upload failed", err);
+    } finally {
+      setUploading(false);
+    }
+  };
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -48,6 +106,7 @@ export default function DriverDashboard() {
     );
   }
 
+  // console.log(driver)
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Mobile Header */}
@@ -95,15 +154,36 @@ export default function DriverDashboard() {
             {user && (
               <div className="mt-auto border-t border-gray-200 pt-4">
                 <div className="flex items-center space-x-3 mb-4">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                    {user.photoURL ? (
-                      <img src={user.photoURL} alt="Profile" className="rounded-full" />
+                  <div className="relative w-10 h-10 group">
+                    {driver?.profileURL ? (
+                      <div className="w-full h-full rounded-full overflow-hidden bg-blue-100 border border-gray-300 shadow-sm group-hover:brightness-90 transition">
+                        <img
+                          src={driver?.profileURL}
+                          alt="Profile"
+                          className="w-full h-full object-cover"
+                        />
+                        {/* "Edit" overlay on hover */}
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 text-white text-xs font-semibold opacity-0 group-hover:opacity-100 transition">
+                          Edit
+                        </div>
+                      </div>
                     ) : (
-                      <span className="text-blue-600">
-                        {user.displayName?.charAt(0) || user.email?.charAt(0)}
-                      </span>
+                      <div className="w-full h-full rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold text-sm">
+                        {user?.displayName?.charAt(0)?.toUpperCase() ||
+                          user?.email?.charAt(0)?.toUpperCase()}
+                      </div>
                     )}
+
+                    {/* Invisible file input covering the entire avatar */}
+                    <input
+                      id="file-upload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleUpload}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
                   </div>
+
                   <div>
                     <p className="font-medium text-gray-900 truncate">
                       {user.displayName || "Driver"}
@@ -133,7 +213,7 @@ export default function DriverDashboard() {
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex justify-between items-center mb-6">
               <h1 className="text-2xl lg:text-3xl font-bold text-gray-800">
-                {tabs.find(tab => tab.id === activeTab)?.label}
+                {tabs.find((tab) => tab.id === activeTab)?.label}
               </h1>
               {/* Mobile Logout Button */}
               <button
