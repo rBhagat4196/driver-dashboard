@@ -143,7 +143,7 @@ export default function CurrentRide({ uid }) {
             await updateDoc(riderRef, {
               isPayment: true,
               notifications: arrayUnion({
-                text: "Ride request accepted",
+                text: "Ride Completed",
                 timeStamp: Date.now(),
                 mark: "unread",
               }),
